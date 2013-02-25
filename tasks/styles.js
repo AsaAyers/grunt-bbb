@@ -18,11 +18,11 @@ module.exports = function(grunt) {
   // Shorthand Grunt functions
   var log = grunt.log;
   var file = grunt.file;
-  
+
   // Needed for backwards compatibility with Stylus task.
   grunt.registerHelper("stylus", function(source, options, callback) {
     var s = require("stylus")(source);
-    
+
     // load nib if available
     try {
       s.use(require("nib")());
@@ -47,7 +47,10 @@ module.exports = function(grunt) {
     var less = require("less");
 
     var css;
-    var parser = new less.Parser();
+
+    var parser = new less.Parser({
+      paths: options.less_paths
+    });
 
     parser.parse(source, function(parse_err, tree) {
       try {
@@ -60,6 +63,10 @@ module.exports = function(grunt) {
   });
 
   grunt.registerMultiTask("styles", "Compile project styles.", function() {
+
+    var done = this.async();
+    var target = this.target;
+
     // Output file.
     var output = "";
     // Options.
@@ -88,7 +95,7 @@ module.exports = function(grunt) {
     // Iterate over the CSS rules, reducing to only @imports, then apply the
     // correct prefixed path to each file.  Finally, process each file and
     // concat into the output file.
-    stylesheet.cssRules.reduce(function(paths, rule) {
+    var paths = stylesheet.cssRules.reduce(function(paths, rule) {
       // If it has a path it's relevant, so add to the paths array.
       if (rule.href) {
         paths.push(rule.href);
@@ -97,31 +104,68 @@ module.exports = function(grunt) {
       return paths;
     }, []).map(function(path) {
       return options.prefix + path;
-    }).concat(options.additional || []).forEach(function(filepath) {
+    }).concat(options.additional || []);
+
+    var process = function(filepath, callback) {
       var contents = file.read(filepath);
 
       // Parse Stylus files.
       if (path.extname(filepath).slice(1) === "styl") {
         return grunt.helper("stylus", contents, options, function(css) {
-          output += css;
+          callback(css);
         });
 
       // Parse LESS files.
       } else if (path.extname(filepath).slice(1) === "less") {
+        // This will allow less files to have an @import relative to itself.
+        options.less_paths = [path.dirname(filepath)];
         return grunt.helper("less", contents, options, function(css) {
-          output += css;
+          callback(css);
         });
       }
 
       // Add vanilla CSS files.
-      output += contents;
-    });
+      callback(contents);
+    };
 
-    // Write out the debug file.
-    file.write(this.target, output);
-    
-    // Success message.
-    log.writeln("File " + this.target + " created.");
+    // If the calls to process() are synchronous this acts as a simple loop.
+    // But if the calls are asyncronous it will pause the loop waiting for the
+    // callback.
+    var asyncLoop = function(paths) {
+      var checkpoint;
+
+      var callback = function(css) {
+        output += css;
+        // If this call as async...
+        if (checkpoint === 'after') {
+          asyncLoop(paths);
+        } else {
+          checkpoint = 'processed';
+        }
+      };
+
+      do {
+        if (paths.length > 0) {
+          checkpoint = 'before';
+          process(paths.shift(), callback);
+          if (checkpoint !== 'processed') {
+            checkpoint = 'after';
+          }
+        } else {
+          // Write out the debug file.
+          file.write(target, output);
+
+          // Success message.
+          log.writeln("File " + target + " created.");
+          done();
+          return;
+        }
+        console.log(checkpoint);
+      } while(checkpoint === 'processed');
+    };
+
+    asyncLoop(paths);
+
   });
 
 };
