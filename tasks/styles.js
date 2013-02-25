@@ -160,7 +160,6 @@ module.exports = function(grunt) {
           done();
           return;
         }
-        console.log(checkpoint);
       } while(checkpoint === 'processed');
     };
 
